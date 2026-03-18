@@ -1,0 +1,160 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --bg-base: #0A0D14;
+  --bg-surface: #0F1117;
+  --bg-elevated: #161B27;
+  --bg-card: #1E2535;
+  --accent: #F5A623;
+  --accent-hover: #E89B1D;
+  --accent-dim: rgba(245,166,35,0.15);
+  --text-primary: #FFFFFF;
+  --text-secondary: rgba(255,180,0,0.08); /* Re-using for history background */
+  --text-dim: rgba(255,255,255,0.6);
+  --text-muted: rgba(255,255,255,0.3);
+  --border: rgba(255,255,255,0.06);
+  --border-active: rgba(245,166,35,0.4);
+
+  --font-display: 'Barlow Condensed', sans-serif;
+  --font-ui: 'Inter', sans-serif;
+  --font-mono: 'JetBrains Mono', monospace;
+
+  --ease: cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background-color: var(--bg-base);
+  color: var(--text-primary);
+  font-family: var(--font-ui);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Sidebar Custom Styling */
+.sidebar-logo-icon {
+  width: 24px;
+  height: 24px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 3px;
+}
+
+.sidebar-logo-item {
+  height: 3px;
+  background: var(--accent);
+  border-radius: 1px;
+}
+
+/* History Item Styling */
+.history-item-active {
+  border-left: 3px solid var(--accent);
+  background: var(--text-secondary); /* Same as rgba(255,180,0,0.08) */
+}
+
+/* Custom Scrollbar */
+.custom-scrollbar::-webkit-scrollbar {
+  width: 5px;
+}
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 10px;
+}
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: var(--text-muted);
+}
+
+/* Input Fields */
+input[type=number] {
+  appearance: textfield;
+  -moz-appearance: textfield;
+}
+
+input::-webkit-outer-spin-button,
+input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+/* Typography Helpers */
+.font-display { font-family: var(--font-display); }
+.font-ui { font-family: var(--font-ui); }
+.font-mono { font-family: var(--font-mono); }
+
+/* Reference Screenshot Components */
+.search-unit-container {
+  background: #161B27;
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 8px;
+}
+
+.loading-panel {
+  background: #161B27;
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 8px;
+}
+
+.progress-track {
+  height: 6px;
+  background: #1E2535;
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.progress-fill {
+  height: 100%;
+  background: var(--accent);
+  border-radius: 3px;
+}
+
+.field-summary-heading {
+  font-family: var(--font-display);
+  font-weight: 800;
+  font-size: 36px;
+  line-height: none;
+  color: white;
+}
+
+.citation-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 14px;
+  height: 14px;
+  padding: 0 4px;
+  background: #1E2535;
+  color: var(--accent);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  border-radius: 3px;
+  vertical-align: middle;
+  margin: 0 2px;
+}
+
+.topic-link {
+  color: var(--accent);
+  text-decoration-line: underline;
+  text-decoration-color: var(--accent);
+  text-underline-offset: 4px;
+  cursor: pointer;
+}
+
+/* Status dots */
+.status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  display: inline-block;
+  vertical-align: middle;
+  margin-right: 6px;
+}
