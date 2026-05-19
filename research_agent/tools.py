@@ -3,7 +3,7 @@ import time
 from typing import Any
 from urllib.parse import urlparse
 
-import arxiv
+import feedparser
 import requests
 from tavily import TavilyClient
 
@@ -19,30 +19,50 @@ ACADEMIC_DOMAINS = [
     "researchgate.net",
 ]
 
+ARXIV_API_URL = "https://export.arxiv.org/api/query"
+ARXIV_USER_AGENT = "GroundworkAI/1.0 (contact@example.com)"
+ARXIV_MAX_RESULTS = 10
+ARXIV_TIMEOUT_SECONDS = 30
+
 
 def _normalize_text(value: str, max_chars: int = 300) -> str:
     return " ".join((value or "").split())[:max_chars]
 
 
-def arxiv_search(query: str, max_results: int = 10) -> list[dict[str, Any]]:
-    client = arxiv.Client()
-    search = arxiv.Search(
-        query=query,
-        max_results=max_results,
-        sort_by=arxiv.SortCriterion.Relevance,
-    )
-
+def _parse_arxiv_feed(feed: feedparser.FeedParserDict) -> list[dict[str, Any]]:
     papers: list[dict[str, Any]] = []
-    for result in client.results(search):
-        arxiv_id = result.get_short_id().split("v")[0]
+    entries = feed.get("entries", []) if isinstance(feed, dict) else []
+
+    for entry in entries:
+        entry_id = str(entry.get("id") or "").strip()
+        arxiv_id = entry_id.rstrip("/").split("/")[-1].split("v")[0] if entry_id else ""
+
+        pdf_url = ""
+        for link in entry.get("links", []) or []:
+            href = str(link.get("href") or "").strip()
+            if not href:
+                continue
+            if link.get("title") == "pdf" or link.get("type") == "application/pdf":
+                pdf_url = href
+                break
+
+        if not pdf_url and arxiv_id:
+            pdf_url = f"https://arxiv.org/pdf/{arxiv_id}"
+
+        authors = []
+        for author in entry.get("authors", []) or []:
+            name = str(author.get("name") or "").strip()
+            if name:
+                authors.append(name)
+
         papers.append(
             {
-                "title": _normalize_text(result.title, 500),
-                "authors": [author.name for author in result.authors],
-                "abstract": _normalize_text(result.summary, 300),
+                "title": _normalize_text(str(entry.get("title") or ""), 500),
+                "authors": authors,
+                "abstract": _normalize_text(str(entry.get("summary") or ""), 300),
                 "arxiv_id": arxiv_id,
-                "pdf_url": f"https://arxiv.org/pdf/{arxiv_id}",
-                "paper_url": f"https://arxiv.org/abs/{arxiv_id}",
+                "pdf_url": pdf_url,
+                "paper_url": entry_id or (f"https://arxiv.org/abs/{arxiv_id}" if arxiv_id else ""),
                 "source": "arxiv",
                 "citation_count": None,
                 "influential_citation_count": None,
@@ -51,6 +71,46 @@ def arxiv_search(query: str, max_results: int = 10) -> list[dict[str, Any]]:
         )
 
     return papers
+
+
+def arxiv_search(query: str, max_results: int = 10) -> list[dict[str, Any]]:
+    safe_max_results = max(1, min(int(max_results or 0), ARXIV_MAX_RESULTS))
+    params = {
+        "search_query": query,
+        "start": 0,
+        "max_results": safe_max_results,
+        "sortBy": "relevance",
+        "sortOrder": "descending",
+    }
+    headers = {
+        "User-Agent": ARXIV_USER_AGENT,
+    }
+
+    for attempt in range(3):
+        try:
+            response = requests.get(
+                ARXIV_API_URL,
+                params=params,
+                headers=headers,
+                timeout=ARXIV_TIMEOUT_SECONDS,
+            )
+
+            if response.status_code == 429:
+                if attempt < 2:
+                    time.sleep(5 * (attempt + 1))
+                    continue
+                return [{"status": "no_results", "source": "arxiv", "reason": "rate_limited"}]
+
+            response.raise_for_status()
+            feed = feedparser.parse(response.content)
+            return _parse_arxiv_feed(feed) or [{"status": "no_results", "source": "arxiv"}]
+        except requests.RequestException:
+            if attempt < 2:
+                time.sleep(5 * (attempt + 1))
+                continue
+            return [{"status": "no_results", "source": "arxiv"}]
+
+    return [{"status": "no_results", "source": "arxiv"}]
 
 
 def tavily_academic_search(query: str, max_results: int = 10) -> list[dict[str, Any]]:

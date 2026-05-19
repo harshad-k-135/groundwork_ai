@@ -37,6 +37,9 @@ def _build_queries(topic: str) -> list[str]:
 
 
 def _normalize_paper_from_arxiv(item: dict[str, Any]) -> dict[str, Any]:
+    if item.get("status") == "no_results":
+        return None
+
     return {
         "title": item.get("title", ""),
         "authors": item.get("authors", []),

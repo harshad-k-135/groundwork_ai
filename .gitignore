@@ -41,8 +41,8 @@ dist/
 build/
 
 # Project-specific
-outputs/
-research_agent/outputs/
+# outputs/
+# research_agent/outputs/
 *.json  # JSON outputs (except essential config)
 !package.json
 !package-lock.json
