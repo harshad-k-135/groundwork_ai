@@ -1,19 +1,21 @@
 import os
 
-from crewai import Agent, LLM
+from crewai import Agent
+from langchain_openai import ChatOpenAI
 
 
 MODEL_NAME = "groq/llama-3.3-70b-versatile"
 
 
-def _groq_llm() -> LLM:
+def _groq_llm() -> ChatOpenAI:
     groq_api_key = os.getenv("GROQ_API_KEY")
     if not groq_api_key:
         raise ValueError("GROQ_API_KEY is missing. Add it to .env before running research.")
 
-    return LLM(
-        model=MODEL_NAME,
+    return ChatOpenAI(
+        model="llama-3.3-70b-versatile",
         api_key=groq_api_key,
+        base_url="https://api.groq.com/openai/v1",
         temperature=0.2,
     )
 

@@ -9,6 +9,7 @@ venv/
 env/
 ENV/
 build/
+.venv311/
 
 # Python
 __pycache__/
@@ -49,3 +50,7 @@ research_agent/outputs/
 # OS
 .DS_Store
 Thumbs.db
+
+# Logs
+gw.md
+QUICKSTART.md
