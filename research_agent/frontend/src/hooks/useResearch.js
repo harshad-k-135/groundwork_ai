@@ -2,6 +2,10 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import axios from "axios";
 import { EMPTY_RESEARCH_DATA, STATUS_MESSAGES } from "../lib/constants";
 
+const apiClient = axios.create({
+  baseURL: import.meta.env.VITE_API_BASE_URL || "",
+});
+
 export function useResearch({ onHistoryAdd }) {
   const [topic, setTopic] = useState("");
   const [maxResults, setMaxResults] = useState(10);
@@ -46,7 +50,7 @@ export function useResearch({ onHistoryAdd }) {
         setStatusIndex(0);
         if (overrideTopic) setTopic(activeTopic);
 
-        const response = await axios.post("/research", {
+        const response = await apiClient.post("/research", {
           topic: activeTopic,
           max_results: Math.min(20, Math.max(1, Number(maxResults) || 10)),
         });
