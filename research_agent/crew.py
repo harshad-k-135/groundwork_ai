@@ -130,6 +130,45 @@ def _merge_deduplicate(
     return merged
 
 
+def _source_priority(source: str) -> int:
+    if source == "semantic_scholar":
+        return 0
+    if source == "arxiv":
+        return 1
+    if source == "tavily":
+        return 2
+    return 3
+
+
+def _paper_sort_key(paper: dict[str, Any]) -> tuple[int, int, str]:
+    citation_count = paper.get("citation_count")
+    citation_score = -(citation_count if isinstance(citation_count, int) else 0)
+    return (
+        _source_priority(str(paper.get("source") or "")),
+        citation_score,
+        _title_key(str(paper.get("title") or "")),
+    )
+
+
+def _build_synthesis_payload(papers: list[dict[str, Any]], limit: int) -> str:
+    compact_papers: list[dict[str, Any]] = []
+    for paper in sorted(papers, key=_paper_sort_key)[: max(1, limit)]:
+        compact_papers.append(
+            {
+                "title": paper.get("title", ""),
+                "authors": list(paper.get("authors", []))[:3],
+                "abstract": str(paper.get("abstract") or "")[:160],
+                "source": paper.get("source", "tavily"),
+                "pdf_url": paper.get("pdf_url"),
+                "paper_url": paper.get("paper_url") or "",
+                "citation_count": paper.get("citation_count"),
+                "relevance_tag": paper.get("relevance_tag"),
+            }
+        )
+
+    return json.dumps(compact_papers, ensure_ascii=False, separators=(",", ":"))
+
+
 def _normalize_search_results(source: str, items: list[dict[str, Any]]) -> list[dict[str, Any]]:
     normalized_papers: list[dict[str, Any]] = []
 
@@ -361,7 +400,8 @@ def run_research(
 
     emit_progress("synthesize", 90, f"Synthesizing {len(merged_papers)} paper{'s' if len(merged_papers) != 1 else ''}")
 
-    papers_payload = json.dumps(merged_papers, ensure_ascii=False, indent=2)
+    synthesis_limit = min(max_results, 12)
+    papers_payload = _build_synthesis_payload(merged_papers, synthesis_limit)
     synthesize_task = create_synthesize_task(cleaned_topic, agents, papers_payload)
     synthesizer_agent = cast(Agent, agents["synthesizer"])
     crew_cls = cast(Any, Crew)
