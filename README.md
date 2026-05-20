@@ -35,25 +35,30 @@ Academic researchers spend **hours manually searching**, **filtering**, and **sy
 - **Tavily Academic** - live web academic content with domain verification
 - **Concurrent fetching** - all sources searched in parallel for <3s total latency
 
-### **2. Intelligent Relevance Filtering**
+### **2. Streamed Query-Level Progress**
+- **Single progress lifecycle** - one loading run per request, no bar resets between subqueries
+- **Live status updates** - messages like "1 paper found" / "2 papers found" during retrieval
+- **NDJSON event stream** - backend streams progress and final result separately for a smoother UI
+
+### **3. Intelligent Relevance Filtering**
 - LLM-powered paper evaluation: rejects off-topic results
 - **3-tier relevance tagging**: `foundational` → `recent` → `tangential`
 - Papers ranked by foundational-first priority (not just citation counts)
 - Automatic deduplication across sources by title matching
 
-### **3. Citation-Grounded Synthesis**
+### **4. Citation-Grounded Synthesis**
 - **250-400 word summaries** with inline citations (Author et al. YEAR)
 - **3 adjacent research directions** extracted per query
 - LLM reasoning with retrieval-only ground truth (no hallucinations)
 - Tracks unverified sources (web-only results flagged)
 
-### **4. Professional PDF Export**
+### **5. Professional PDF Export**
 - **Title page**: Topic, sources, generation date, paper count
 - **Summary page**: Formatted field summary with citations
 - **Papers list**: Filterable by relevance, source, topic
 - **Related topics**: Suggested research directions for expansion
 
-### **5. Search History & Persistence**
+### **6. Search History & Persistence**
 - **Browser localStorage** - automatic search history (up to 10 recent queries)
 - **Export capability** - save results as JSON or PDF
 - **Quick rerun** - click related topics to auto-search adjacent domains
@@ -73,7 +78,7 @@ Academic researchers spend **hours manually searching**, **filtering**, and **sy
                          │ (axios) HTTP
 ┌────────────────────────▼────────────────────────────────────────┐
 │              Backend (FastAPI + CrewAI)                         │
-│                      /research endpoint                         │
+│          /research + /research/stream endpoints                 │
 └────────────────────────┬────────────────────────────────────────┘
                          │
         ┌────────────────┼────────────────┐
@@ -107,7 +112,12 @@ Academic researchers spend **hours manually searching**, **filtering**, and **sy
         → TAG papers (foundational/recent/tangential)
         → SYNTHESIZE with citations
         → EXTRACT related topics
-        → OUTPUT JSON with validation
+      → OUTPUT JSON with validation
+
+      Backend request model:
+      → FastAPI routes long work through thread pools
+      → Streams progress events to the UI as NDJSON
+      → Returns one final JSON payload per research run
         
         │
         ▼
@@ -124,24 +134,32 @@ Academic researchers spend **hours manually searching**, **filtering**, and **sy
 
 ### **Data Flow: Query to Output**
 
-1. **User submits topic** → Frontend sends POST `/research`
+1. **User submits topic** → Frontend sends POST `/research/stream`
 2. **Backend validates** input (1-20 results, string sanitization)
 3. **Query Strategist** decomposes topic into 3 precise academic queries
-4. **ThreadPoolExecutor** spawns 3 workers:
+4. **ThreadPoolExecutor** runs the 3 query batches concurrently, and each batch fans out to 3 source workers:
    - Worker 1: `arxiv_search()` with `sortBy=Relevance`
    - Worker 2: `semantic_scholar_search()` with rate-limit pacing
    - Worker 3: `tavily_academic_search()` with domain filter
-5. **Merging** - deduplicates by `title.lower()`, prioritizes sources
-6. **Synthesizer Agent** receives merged JSON payload:
+5. **Streaming progress** - backend emits monotonic progress updates and live paper counts
+6. **Merging** - deduplicates by `title.lower()`, prioritizes sources
+7. **Synthesizer Agent** receives merged JSON payload:
    - Evaluates each paper's relevance to topic → filters
    - Assigns relevance tags (foundational/recent/tangential)
    - Writes synthesis with inline citations
    - Suggests 3 related topics
-7. **Output normalization**:
+8. **Output normalization**:
    - Coerces summary to plain prose (detects JSON blobs)
    - Enforces max_results hard cap
    - Sorts papers: foundational → recent → tangential
-8. **Response** returned to frontend (JSON + generated_at timestamp)
+9. **Response** returned to frontend (streamed progress + final JSON payload)
+
+### **Deployment Model**
+
+- The backend is designed to be deployment-friendly on a single app worker because blocking I/O is isolated in thread pools.
+- One research run can keep the UI responsive while the server streams progress events back to the browser.
+- The practical concurrency target for this repo is **3 simultaneous user jobs** per deployment worker. That matches the 3-query fan-out and avoids overcommitting the upstream APIs and Groq inference path.
+- For higher traffic, add horizontal scaling with more workers or move research jobs into a dedicated queue.
 
 ---
 
@@ -155,6 +173,7 @@ Academic researchers spend **hours manually searching**, **filtering**, and **sy
   - `requests` HTTP client (Semantic Scholar public API)
   - `tavily-python` (web academic search)
 - **Async**: `concurrent.futures.ThreadPoolExecutor` (parallel API calls)
+- **Request handling**: streamed NDJSON progress events + threadpool offloading for blocking work
 - **Config**: `python-dotenv` (environment variable management)
 
 ### **Frontend**
@@ -317,6 +336,13 @@ curl -X POST http://localhost:8000/research \
 - `500 Internal Server Error` - API failure with fallback results
 - `503 Service Unavailable` - Groq/Tavily rate limit (with retry guidance)
 
+#### **POST `/research/stream`**
+Execute the same research query, but stream progress updates while the backend is working.
+
+- Emits NDJSON events with `progress`, `message`, `papers_found`, and the final `result`
+- Used by the frontend to keep the loading bar moving once per overall query
+- Better fit for deployed environments because the client can stay connected without polling
+
 ---
 
 ## 📊 Data Quality & Filtering
@@ -332,6 +358,15 @@ If uncertain about relevance, REJECT the paper."
 ```
 
 **Result**: Average 95%+ topical relevance, with off-topic papers automatically culled.
+
+### **Concurrency Model**
+
+The app is intentionally tuned for a small number of simultaneous research jobs rather than unlimited fan-out:
+
+- Each request performs multiple outbound API calls and one LLM synthesis pass.
+- Those operations are I/O-heavy and rate-limit-sensitive, so allowing too many concurrent jobs increases tail latency quickly.
+- A single deployment worker can handle roughly 3 active research jobs cleanly because the work is split across thread pools instead of blocking the event loop.
+- Beyond that, queueing or horizontal scaling is the correct next step.
 
 ### **Relevance Tag Definitions**
 
@@ -388,11 +423,12 @@ If uncertain about relevance, REJECT the paper."
 
 | Metric | Benchmark | Notes |
 |--------|-----------|-------|
-| **P99 Latency** | <4 seconds | 3 sources in parallel |
+| **P99 Latency** | <4 seconds | 3 sources in parallel, progress streamed |
 | **Relevance** | 95%+ | LLM filtering removes off-topic papers |
 | **Deduplication** | 99.9% | Title-based matching across sources |
 | **API Success Rate** | 98% | Fallback queries on rate-limit |
 | **Memory Usage** | <200MB | Streaming JSON parsing |
+| **Concurrent Jobs** | 3 active users/job runs | Practical target per deployment worker |
 
 ---
 
@@ -469,26 +505,36 @@ MIT License - see LICENSE file for details.
    - <3s end-to-end latency despite 3 external APIs
    - Proper exception handling with fallbacks
 
-3. **Data Quality First**
+3. **Deployment-Friendly Streaming**
+   - `/research/stream` keeps the browser updated without polling
+   - Long-running work is offloaded from the event loop
+   - The UI sees one monotonic progress run per query
+
+4. **Data Quality First**
    - LLM-powered filtering (not just keyword matching)
    - Citation-grounded synthesis (no hallucinations)
    - Deduplication with fuzzy matching
    - Source tracking for transparency
 
-4. **Full-Stack Implementation**
+5. **Full-Stack Implementation**
    - Backend: FastAPI async patterns, CrewAI orchestration
    - Frontend: React state management, Framer animations
    - PDF export: In-browser generation without server overhead
    - Integration: 3 external APIs + LLM service
 
-5. **Production-Ready Code**
+6. **Production-Ready Code**
    - Error handling with graceful degradation
    - Rate-limit protection and retry logic
    - Environment configuration with `.env`
    - Type hints (Python 3.8+)
    - JSON validation and schema enforcement
 
-6. **User Experience**
+7. **Controlled Concurrency**
+   - Tuned for about 3 concurrent research jobs per worker
+   - Avoids request collapse under simultaneous user traffic
+   - Designed to scale horizontally when traffic exceeds that range
+
+8. **User Experience**
    - Real-time status updates ("Searching ArXiv..." → "Synthesizing findings...")
    - Professional PDF export
    - Search history persistence
