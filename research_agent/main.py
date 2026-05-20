@@ -17,10 +17,27 @@ load_dotenv()
 
 app = FastAPI(title="Research Agent API")
 
-allowed_origins = ["http://localhost:5173"]
-frontend_url = os.getenv("FRONTEND_URL", "").strip()
-if frontend_url:
-    allowed_origins.append(frontend_url)
+def _build_allowed_origins() -> list[str]:
+    origins = {
+        "http://localhost:5173",
+        "https://gw-ai-research.vercel.app",
+    }
+
+    frontend_url = os.getenv("FRONTEND_URL", "").strip()
+    if frontend_url:
+        origins.add(frontend_url)
+
+    frontend_origins = os.getenv("FRONTEND_ORIGINS", "").strip()
+    if frontend_origins:
+        for origin in frontend_origins.split(","):
+            cleaned_origin = origin.strip()
+            if cleaned_origin:
+                origins.add(cleaned_origin)
+
+    return sorted(origins)
+
+
+allowed_origins = _build_allowed_origins()
 
 app.add_middleware(
     CORSMiddleware,
