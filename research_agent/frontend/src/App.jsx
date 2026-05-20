@@ -24,6 +24,8 @@ export default function App() {
     researchData,
     statusIndex,
     progressPercent,
+    loadingMessage,
+    papersFound,
     copied,
     error,
     summaryWordCount,
@@ -114,6 +116,8 @@ export default function App() {
               topic={topic}
               statusIndex={statusIndex}
               progressPercent={progressPercent}
+              loadingMessage={loadingMessage}
+              papersFound={papersFound}
             />
           )}
 

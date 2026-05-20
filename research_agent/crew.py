@@ -2,9 +2,10 @@ import json
 import os
 import re
 import ast
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
-from typing import Any, cast
+from threading import Lock
+from typing import Any, Callable, cast
 
 from crewai import Agent, Crew, Process
 from dotenv import load_dotenv
@@ -129,6 +130,24 @@ def _merge_deduplicate(
     return merged
 
 
+def _normalize_search_results(source: str, items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    normalized_papers: list[dict[str, Any]] = []
+
+    for item in items:
+        normalized_paper: dict[str, Any] | None
+        if source == "arxiv":
+            normalized_paper = _normalize_paper_from_arxiv(item)
+        elif source == "semantic_scholar":
+            normalized_paper = _normalize_paper_from_semantic(item)
+        else:
+            normalized_paper = _normalize_paper_from_tavily(item)
+
+        if normalized_paper:
+            normalized_papers.append(normalized_paper)
+
+    return normalized_papers
+
+
 def _enforce_limit(papers: list[dict[str, Any]], max_results: int) -> list[dict[str, Any]]:
     if max_results <= 0:
         return []
@@ -207,16 +226,48 @@ def _normalize_summary_value(value: Any) -> str:
     return ""
 
 
-def _search_all_sources(query: str, max_results: int) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
+def _search_all_sources(
+    query: str,
+    max_results: int,
+    progress_callback: Callable[[dict[str, Any]], None] | None = None,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
+    arxiv_papers: list[dict[str, Any]] = []
+    semantic_papers: list[dict[str, Any]] = []
+    web_papers: list[dict[str, Any]] = []
+
     with ThreadPoolExecutor(max_workers=3) as executor:
-        arxiv_future = executor.submit(arxiv_search, query=query, max_results=max_results)
-        semantic_future = executor.submit(semantic_scholar_search, query=query, max_results=max_results)
-        tavily_future = executor.submit(tavily_academic_search, query=query, max_results=max_results)
+        future_to_source = {
+            executor.submit(arxiv_search, query=query, max_results=max_results): "arxiv",
+            executor.submit(semantic_scholar_search, query=query, max_results=max_results): "semantic_scholar",
+            executor.submit(tavily_academic_search, query=query, max_results=max_results): "tavily",
+        }
 
-        return arxiv_future.result(), semantic_future.result(), tavily_future.result()
+        for future in as_completed(future_to_source):
+            source = future_to_source[future]
+            try:
+                results = future.result()
+            except Exception:
+                results = [{"status": "no_results", "source": source}]
+
+            normalized_results = _normalize_search_results(source, results)
+            if source == "arxiv":
+                arxiv_papers.extend(normalized_results)
+            elif source == "semantic_scholar":
+                semantic_papers.extend(normalized_results)
+            else:
+                web_papers.extend(normalized_results)
+
+            if progress_callback:
+                progress_callback({"source": source, "papers": normalized_results})
+
+    return arxiv_papers, semantic_papers, web_papers
 
 
-def run_research(topic: str, max_results: int = 10) -> dict[str, Any]:
+def run_research(
+    topic: str,
+    max_results: int = 10,
+    progress_callback: Callable[[dict[str, Any]], None] | None = None,
+) -> dict[str, Any]:
     cleaned_topic = (topic or "").strip()
     if not cleaned_topic:
         raise ValueError("Topic is required.")
@@ -235,24 +286,80 @@ def run_research(topic: str, max_results: int = 10) -> dict[str, Any]:
     semantic_papers: list[dict[str, Any]] = []
     web_papers: list[dict[str, Any]] = []
 
-    for query in queries:
-        arxiv_results, semantic_results, tavily_results = _search_all_sources(query=query, max_results=max_results)
+    search_progress_lock = Lock()
+    completed_sources = 0
+    unique_found_titles: set[str] = set()
+    unique_found_count = 0
 
-        for result in arxiv_results:
-            arxiv_papers.append(_normalize_paper_from_arxiv(result))
+    def emit_progress(stage: str, progress: int, message: str) -> None:
+        if not progress_callback:
+            return
+        progress_callback(
+            {
+                "type": "progress",
+                "stage": stage,
+                "progress": max(0, min(100, int(progress))),
+                "message": message,
+                "papers_found": unique_found_count,
+            }
+        )
 
-        for result in semantic_results:
-            normalized = _normalize_paper_from_semantic(result)
-            if normalized:
-                semantic_papers.append(normalized)
+    def record_source_progress(event: dict[str, Any]) -> None:
+        nonlocal completed_sources, unique_found_count
 
-        for result in tavily_results:
-            normalized = _normalize_paper_from_tavily(result)
-            if normalized:
-                web_papers.append(normalized)
+        papers = event.get("papers", []) if isinstance(event, dict) else []
+        with search_progress_lock:
+            completed_sources += 1
+            for paper in papers:
+                title = str((paper or {}).get("title") or "").strip()
+                if not title:
+                    continue
+                title_key = _title_key(title)
+                if title_key in unique_found_titles:
+                    continue
+                unique_found_titles.add(title_key)
+                unique_found_count += 1
+
+            total_sources = max(1, len(queries) * 3)
+            if completed_sources >= total_sources:
+                progress = 85
+            else:
+                progress = 15 + int((completed_sources / total_sources) * 70)
+
+            message = f"{unique_found_count} paper{'s' if unique_found_count != 1 else ''} found"
+            if event.get("source"):
+                message = f"{message} from {str(event.get('source')).replace('_', ' ')}"
+
+        emit_progress("retrieve", progress, message)
+
+    emit_progress("decompose", 5, "Decomposing topic into search queries")
+
+    query_workers = min(3, len(queries)) or 1
+    with ThreadPoolExecutor(max_workers=query_workers) as executor:
+        future_to_query = {
+            executor.submit(
+                _search_all_sources,
+                query=query,
+                max_results=max_results,
+                progress_callback=record_source_progress,
+            ): query
+            for query in queries
+        }
+
+        for future in as_completed(future_to_query):
+            try:
+                arxiv_results, semantic_results, tavily_results = future.result()
+            except Exception:
+                continue
+
+            arxiv_papers.extend(arxiv_results)
+            semantic_papers.extend(semantic_results)
+            web_papers.extend(tavily_results)
 
     merged_papers = _merge_deduplicate(arxiv_papers, semantic_papers, web_papers)
     merged_papers = _enforce_limit(merged_papers, max_results)
+
+    emit_progress("synthesize", 90, f"Synthesizing {len(merged_papers)} paper{'s' if len(merged_papers) != 1 else ''}")
 
     papers_payload = json.dumps(merged_papers, ensure_ascii=False, indent=2)
     synthesize_task = create_synthesize_task(cleaned_topic, agents, papers_payload)
@@ -322,6 +429,8 @@ def run_research(topic: str, max_results: int = 10) -> dict[str, Any]:
     response_payload["unverified_count"] = sum(
         1 for paper in response_payload["papers"] if paper.get("source") == "unverified"
     )
+
+    emit_progress("complete", 100, f"{response_payload['total_found']} papers found")
 
     with open(output_file_path, "w", encoding="utf-8") as file:
         json.dump(response_payload, file, ensure_ascii=False, indent=2)

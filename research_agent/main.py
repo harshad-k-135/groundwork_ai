@@ -1,8 +1,14 @@
+import json
+from queue import Queue
+from threading import Thread
+
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from dotenv import load_dotenv
 import os
+from starlette.concurrency import run_in_threadpool
 
 from crew import run_research
 
@@ -36,9 +42,9 @@ def health() -> dict:
 
 
 @app.post("/research")
-def research(payload: ResearchRequest) -> dict:
+async def research(payload: ResearchRequest) -> dict:
     try:
-        result = run_research(payload.topic, payload.max_results)
+        result = await run_in_threadpool(run_research, payload.topic, payload.max_results)
         papers = result.get("papers", [])
 
         relevance_order = {
@@ -63,3 +69,32 @@ def research(payload: ResearchRequest) -> dict:
         raise HTTPException(status_code=400, detail=str(error)) from error
     except Exception as error:
         raise HTTPException(status_code=500, detail=str(error)) from error
+
+
+@app.post("/research/stream")
+def research_stream(payload: ResearchRequest) -> StreamingResponse:
+    events: Queue[dict[str, object] | None] = Queue()
+
+    def push_event(event: dict[str, object]) -> None:
+        events.put(event)
+
+    def worker() -> None:
+        try:
+            result = run_research(payload.topic, payload.max_results, progress_callback=push_event)
+            events.put({"type": "result", "data": result})
+        except Exception as error:
+            events.put({"type": "error", "detail": str(error)})
+        finally:
+            events.put(None)
+
+    def event_stream():
+        thread = Thread(target=worker, daemon=True)
+        thread.start()
+
+        while True:
+            item = events.get()
+            if item is None:
+                break
+            yield json.dumps(item, ensure_ascii=False) + "\n"
+
+    return StreamingResponse(event_stream(), media_type="application/x-ndjson")

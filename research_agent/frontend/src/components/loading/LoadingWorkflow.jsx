@@ -4,7 +4,6 @@ import {
   CheckCircle2,
   Circle,
   Database,
-  Globe,
   Loader2,
   Network,
   Sparkles,
@@ -15,10 +14,9 @@ import { cn } from "../../lib/utils";
 
 const STEP_ICONS = {
   decompose: Network,
-  arxiv: Database,
-  semantic: Brain,
-  web: Globe,
+  retrieve: Database,
   synthesize: Sparkles,
+  complete: Brain,
 };
 
 const container = {
@@ -31,7 +29,7 @@ const stepItem = {
   show: { opacity: 1, x: 0 },
 };
 
-export function LoadingWorkflow({ topic, statusIndex, progressPercent }) {
+export function LoadingWorkflow({ topic, statusIndex, progressPercent, loadingMessage, papersFound }) {
   return (
     <motion.div
       initial={{ opacity: 0, y: 16 }}
@@ -79,6 +77,18 @@ export function LoadingWorkflow({ topic, statusIndex, progressPercent }) {
             transition={{ duration: 0.6, ease: [0.16, 1, 0.3, 1] }}
           />
         </motion.div>
+
+        <div className="mb-8 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-glass-border/60 bg-background/30 px-4 py-3">
+          <div>
+            <p className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground">
+              Live status
+            </p>
+            <p className="mt-1 text-sm font-medium text-foreground">{loadingMessage}</p>
+          </div>
+          <p className="font-display text-lg font-semibold text-accent">
+            {papersFound} paper{papersFound === 1 ? "" : "s"} found
+          </p>
+        </div>
 
         <motion.ul variants={container} initial="hidden" animate="show" className="space-y-3">
           {WORKFLOW_STEPS.map((step) => {
